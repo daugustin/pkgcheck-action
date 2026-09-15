@@ -1,0 +1,143 @@
+##
+## Runs the action against test/fixture-overlay, whose packages are built to
+## produce a known set of results. See test/fixture-overlay for what each
+## violation is meant to trigger.
+##
+name: selftest
+
+on:
+  push:
+    branches: [main, phase1]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fixture:
+    name: fixture / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-26.04 is where EAPI 9 is supported; ubuntu-latest is still
+        # 24.04 and is not. Both must work, differing only in the EAPI warning.
+        runner: [ubuntu-latest, ubuntu-26.04]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # exit-on is emptied so this invocation always succeeds, which lets the
+      # outputs be asserted without depending on whether a failing composite
+      # step still publishes them.
+      - name: Scan fixture (non-failing)
+        id: pass
+        uses: ./
+        with:
+          working-directory: test/fixture-overlay
+          exit-on: ""
+          on-unsupported-eapi: warn
+
+      - name: Assert results
+        env:
+          RESULTS: ${{ steps.pass.outputs.results-json }}
+          ERRORS: ${{ steps.pass.outputs.error-count }}
+          WARNINGS: ${{ steps.pass.outputs.warning-count }}
+          TOTAL: ${{ steps.pass.outputs.result-count }}
+          VERSION: ${{ steps.pass.outputs.pkgcheck-version }}
+        run: |
+          echo "pkgcheck: $VERSION"
+          echo "errors=$ERRORS warnings=$WARNINGS total=$TOTAL"
+          test -s "$RESULTS" || { echo "::error::results file is empty"; exit 1; }
+
+          # dev-util/fixture-broken alone accounts for one error
+          # (UnknownLicense), one warning (BadWhitespaceCharacter), two info and
+          # two style results. Asserted as lower bounds so that adding a
+          # keyword to the fixture, or scanning on a runner that also reports
+          # InvalidEapi, does not break the test.
+          (( ERRORS >= 1 )) || { echo "::error::expected >=1 error, got $ERRORS"; exit 1; }
+          (( WARNINGS >= 1 )) || { echo "::error::expected >=1 warning, got $WARNINGS"; exit 1; }
+          (( TOTAL >= 6 )) || { echo "::error::expected >=6 results, got $TOTAL"; exit 1; }
+
+          # The load-bearing one: UnknownLicense resolves against the master
+          # repo's license list, so it only fires if the synced gentoo tree is
+          # genuinely wired in. It is the proof that masters=gentoo resolved.
+          grep -q '"__class__": "UnknownLicense"' "$RESULTS" || {
+            echo "::error::UnknownLicense missing; the gentoo master repo did not resolve"
+            exit 1
+          }
+
+          # Line-accurate annotations in Phase 2 depend on this field existing.
+          grep -q '"__class__": "BadWhitespaceCharacter".*"lineno"' "$RESULTS" || {
+            echo "::error::BadWhitespaceCharacter carried no lineno"
+            exit 1
+          }
+
+      - name: Scan fixture (default exit-on)
+        id: fail
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: test/fixture-overlay
+          on-unsupported-eapi: warn
+
+      - name: Assert the fixture fails the build
+        run: |
+          outcome='${{ steps.fail.outcome }}'
+          echo "outcome=$outcome exit-code=${{ steps.fail.outputs.exit-code }}"
+          [[ $outcome == failure ]] || {
+            echo "::error::fixture has GentooCI errors but the action passed"
+            exit 1
+          }
+
+  # The EAPI guard only has something to catch where bash is too old. If this
+  # job starts failing because ubuntu-latest moved to 26.04, that is good news:
+  # drop the job and revisit the caveat in the README.
+  preflight-guard:
+    name: preflight guard / old bash
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check this runner is actually the old-bash case
+        id: bash
+        run: |
+          echo "bash=$BASH_VERSION"
+          if [[ ${BASH_VERSINFO[0]} -gt 5 || ( ${BASH_VERSINFO[0]} -eq 5 && ${BASH_VERSINFO[1]} -ge 3 ) ]]; then
+            echo "::notice::runner has bash $BASH_VERSION; EAPI 9 is supported here and the guard has nothing to catch"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Scan with the guard armed
+        id: guard
+        if: steps.bash.outputs.skip != 'true'
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: test/fixture-overlay
+          on-unsupported-eapi: error
+
+      - name: Assert the guard fired
+        if: steps.bash.outputs.skip != 'true'
+        run: |
+          [[ '${{ steps.guard.outcome }}' == failure ]] || {
+            echo "::error::fixture has an EAPI 9 ebuild and bash is too old, but the guard did not fire"
+            exit 1
+          }
+          echo "guard fired as expected"

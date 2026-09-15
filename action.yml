@@ -1,0 +1,162 @@
+name: pkgcheck
+description: Run pkgcheck over a Gentoo ebuild repository
+author: Daniel Augustin
+
+branding:
+  icon: check-square
+  color: purple
+
+inputs:
+  pkgcheck-version:
+    description: >-
+      Exact pkgcheck version to install. Pinned by default: the result schema
+      and keyword severities are read off the installed pkgcheck, so an
+      unpinned upgrade can change what this action reports. Set to an empty
+      string to take whatever pip resolves.
+    required: false
+    default: "0.10.44"
+
+  python-version:
+    description: Python version used for the pkgcheck venv.
+    required: false
+    default: "3.12"
+
+  working-directory:
+    description: Path to the ebuild repository to scan.
+    required: false
+    default: "."
+
+  scope:
+    description: >-
+      What to scan. 'auto' scans the commits in the pull request on
+      pull_request events and the whole repository otherwise; 'all' always
+      scans everything; 'commits' scans changes against base-ref; 'staged'
+      scans staged changes.
+    required: false
+    default: auto
+
+  base-ref:
+    description: >-
+      Tree-ish to compare against for scope 'commits'. Defaults to the pull
+      request base branch. Requires full history -- see fetch-depth in the
+      README.
+    required: false
+    default: ""
+
+  keywords:
+    description: Passed to `pkgcheck scan -k`, e.g. "-RedundantVersion".
+    required: false
+    default: ""
+
+  exit-on:
+    description: >-
+      Checksets, checks or keywords that make this action fail, passed to
+      `pkgcheck scan --exit`. Note this is independent of severity: GentooCI
+      includes warning-level keywords. Set to an empty string to always pass.
+    required: false
+    default: GentooCI
+
+  net:
+    description: Enable pkgcheck's network checks.
+    required: false
+    default: "false"
+
+  cache:
+    description: Cache the synced gentoo tree and pkgcheck's metadata caches.
+    required: false
+    default: "true"
+
+  on-unsupported-eapi:
+    description: >-
+      What to do when the repository uses an EAPI the runner's bash is too old
+      for: 'error', 'warn' or 'ignore'. pkgcore disables such an EAPI outright,
+      which makes metadata regeneration fail and reports InvalidEapi against
+      valid ebuilds, so the default is to stop with an explanation.
+    required: false
+    default: error
+
+outputs:
+  results-json:
+    description: Path to the JsonStream results, one JSON object per line.
+    value: ${{ steps.scan.outputs.results-json }}
+  result-count:
+    description: Total number of results.
+    value: ${{ steps.scan.outputs.result-count }}
+  error-count:
+    description: Number of error-level results.
+    value: ${{ steps.scan.outputs.error-count }}
+  warning-count:
+    description: Number of warning-level results.
+    value: ${{ steps.scan.outputs.warning-count }}
+  exit-code:
+    description: pkgcheck's exit code, before the action fails the job.
+    value: ${{ steps.scan.outputs.exit-code }}
+  pkgcheck-version:
+    description: The pkgcheck version actually installed.
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Compute cache key
+      id: cachekey
+      shell: bash
+      # Rotated weekly rather than held stable forever. A stable key is never
+      # re-saved once it exists, so the cached tree would go stale and every
+      # run would pay a full sync; and at ~50 MB compressed a weekly entry is
+      # cheap against the 10 GB per-repo budget.
+      run: |
+        echo "key=pkgcheck-${{ inputs.pkgcheck-version }}-$(date -u +%G-%V)" >>"$GITHUB_OUTPUT"
+        echo "prefix=pkgcheck-${{ inputs.pkgcheck-version }}-" >>"$GITHUB_OUTPUT"
+
+    - name: Restore caches
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/.cache/pkgcore
+          ~/.cache/pkgcheck
+        key: ${{ steps.cachekey.outputs.key }}
+        restore-keys: ${{ steps.cachekey.outputs.prefix }}
+
+    - name: Install pkgcheck and sync gentoo
+      id: install
+      shell: bash
+      env:
+        INPUT_PKGCHECK_VERSION: ${{ inputs.pkgcheck-version }}
+      run: ${{ github.action_path }}/scripts/install.sh
+
+    - name: Preflight
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_ON_UNSUPPORTED_EAPI: ${{ inputs.on-unsupported-eapi }}
+      run: ${{ github.action_path }}/scripts/preflight.sh
+
+    - name: Scan
+      id: scan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_KEYWORDS: ${{ inputs.keywords }}
+        INPUT_EXIT_ON: ${{ inputs.exit-on }}
+        INPUT_NET: ${{ inputs.net }}
+      run: ${{ github.action_path }}/scripts/scan.sh
+
+    - name: Save caches
+      # always(): a failing scan is the normal outcome when there are QA errors,
+      # and re-syncing from scratch next run because of it would be silly.
+      if: always() && inputs.cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/.cache/pkgcore
+          ~/.cache/pkgcheck
+        key: ${{ steps.cachekey.outputs.key }}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<!-- maintainer-needed -->
+	<longdescription lang="en">
+		Fixture package used by the pkgcheck-action self-test. It exists only so
+		that a scan has something well-formed to look at; it installs nothing of
+		consequence and is never intended to be merged.
+	</longdescription>
+	<upstream>
+		<remote-id type="github">daugustin/pkgcheck-action</remote-id>
+	</upstream>
+</pkgmetadata>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<!-- maintainer-needed -->
+	<longdescription lang="en">
+		Fixture package pinned to EAPI 9. pkgcore disables EAPI 9 below
+		bash 5.3, so on an older runner this package reports InvalidEapi and
+		nothing else. That is the detector, not a bug in the ebuild.
+	</longdescription>
+	<upstream>
+		<remote-id type="github">daugustin/pkgcheck-action</remote-id>
+	</upstream>
+</pkgmetadata>

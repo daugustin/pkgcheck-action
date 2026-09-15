@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<!-- maintainer-needed -->
+	<longdescription lang="en">
+		Fixture package carrying deliberate QA violations so that the
+		pkgcheck-action self-test has something to find. Never intended to be
+		merged; see the comments in fixture-broken-1.0.ebuild for which keyword
+		each violation is meant to trigger.
+	</longdescription>
+</pkgmetadata>
