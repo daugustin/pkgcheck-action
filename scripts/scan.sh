@@ -23,8 +23,19 @@ results=${RUNNER_TEMP:-/tmp}/pkgcheck-results.jsonl
 
 group "Regenerating repo metadata"
 mkdir -p "$HOME/.cache/pkgcheck/repos"
-"$(pmaint_bin)" regen --dir "$HOME/.cache/pkgcheck/repos" .
+regen_rc=0
+"$(pmaint_bin)" regen --dir "$HOME/.cache/pkgcheck/repos" . || regen_rc=$?
 endgroup
+
+if ((regen_rc != 0)); then
+	# regen warms a cache; it is not the authority on whether the repo is sound.
+	# Anything it chokes on, the scan reports itself as a proper result
+	# (InvalidEapi, SourcingError, ...) with --exit deciding the outcome, so
+	# aborting here would turn a reported finding into an unexplained step
+	# failure. It would also make on-unsupported-eapi: warn a lie, since regen
+	# is precisely what fails on an EAPI the host's bash has disabled.
+	warn "metadata regeneration reported errors (exit $regen_rc); results for the affected packages may be incomplete"
+fi
 
 if [[ $scope == auto ]]; then
 	case ${GITHUB_EVENT_NAME:-} in
